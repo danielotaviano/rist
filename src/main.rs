@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
 use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
+use sha1::{Digest, Sha1};
 use std::ffi::CStr;
 use std::fs;
 use std::io::prelude::*;
@@ -19,6 +22,12 @@ enum Command {
         pretty_print: bool,
 
         object_hash: String,
+    },
+    HashObject {
+        #[clap(short = 'w')]
+        write: bool,
+
+        path: String,
     },
 }
 
@@ -71,6 +80,46 @@ fn main() {
 
             let content = &s[cstr.len() + 1..file_size];
             print!("{}", content);
+        }
+        Command::HashObject { write, path } => {
+            let file_content =
+                String::from_utf8(fs::read(path).expect("Unable to read the file").to_vec())
+                    .expect("Expect only bytes");
+
+            let file_content_with_header = format!("blob {}\0{}", file_content.len(), file_content);
+
+            let mut hasher = Sha1::new();
+            hasher.update(file_content_with_header.as_bytes());
+
+            let hash = format!("{:X}", hasher.finalize()).to_lowercase();
+
+            if write {
+                let folder_name = &hash[..2];
+                let file_name = &hash[2..];
+
+                let create_dir_result = fs::create_dir(format!(".git/objects/{}", folder_name));
+
+                if let Err(_) = create_dir_result {
+                    fs::remove_dir_all(format!(".git/objects/{}", folder_name))
+                        .expect("Unable to remove the dir");
+
+                    fs::create_dir(format!(".git/objects/{}", folder_name))
+                        .expect("Unable to create the folder")
+                }
+
+                let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                e.write_all(file_content_with_header.as_bytes())
+                    .expect("Unable to write in compress buffer");
+                let compressed = e.finish().expect("Unable to compress the content");
+
+                fs::write(
+                    format!(".git/objects/{}/{}", folder_name, file_name),
+                    compressed,
+                )
+                .expect("Unable to write the file")
+            }
+
+            println!("{}", hash);
         }
     }
 }
